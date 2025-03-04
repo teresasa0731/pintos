@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  pintos:
+    image: davidchen871/pintos
+    container_name: pintos
+    stdin_open: true  
+    tty: true         
+    restart: no       
+    volumes:
+     - C:\Users\david\Dropbox\研究所\博士\助教\作業系統\pintos\pintos\original:/home/pintos

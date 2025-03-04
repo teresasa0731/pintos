@@ -1,2 +1,4 @@
 # Pintos
-EE 5173 Operating System
+### This is used for NTU OS class
+
+* Test it if success: ```pintos run alarm-multiple```
