@@ -27,7 +27,7 @@
 static const int EXPECTED_DEPTH_TO_PASS = 30;
 static const int EXPECTED_REPETITIONS = 10;
 
-const char *test_name = "multi-oom";
+// const char *test_name = "multi-oom";
 
 enum child_termination_mode { RECURSE, CRASH };
 
@@ -37,6 +37,7 @@ static pid_t
 spawn_child (int c, enum child_termination_mode mode)
 {
   char child_cmd[128];
+  
   snprintf (child_cmd, sizeof child_cmd,
             "%s %d %s", test_name, c, mode == CRASH ? "-k" : "");
   return exec (child_cmd);
@@ -106,7 +107,7 @@ int
 main (int argc, char *argv[])
 {
   int n;
-
+  test_name = "multi-oom";
   n = argc > 1 ? atoi (argv[1]) : 0;
   bool is_at_root = (n == 0);
   if (is_at_root)

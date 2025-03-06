@@ -5,10 +5,11 @@
 #include <stdio.h>
 #include "tests/lib.h"
 
-const char *test_name = "child-empty";
+// const char *test_name = "child-empty";
 
 int
 main (void)
 {
+  test_name = "child-empty";
   return 0;
 }
