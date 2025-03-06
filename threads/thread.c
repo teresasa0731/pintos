@@ -78,7 +78,7 @@ static tid_t allocate_tid (void);
 
    Also initializes the run queue and the tid lock.
 
-   After calling this function, be sure to initialize the page
+   After calling this function, be sure to initialize the pagef
    allocator before trying to create any threads with
    thread_create().
 
@@ -171,6 +171,7 @@ thread_create (const char *name, int priority,
   struct switch_entry_frame *ef;
   struct switch_threads_frame *sf;
   tid_t tid;
+  enum intr_level old_level;
 
   ASSERT (function != NULL);
 
@@ -182,6 +183,7 @@ thread_create (const char *name, int priority,
   /* Initialize thread. */
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
+
 
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
@@ -198,8 +200,17 @@ thread_create (const char *name, int priority,
   sf->eip = switch_entry;
   sf->ebp = 0;
 
+  old_level = intr_disable ();
+  intr_set_level(old_level);
+
+
   /* Add to run queue. */
   thread_unblock (t);
+
+#ifdef USERPROG
+  t->parent = thread_current();
+  list_push_back(&thread_current()->children, &t->child_elem);
+#endif
 
   return tid;
 }
@@ -467,6 +478,9 @@ init_thread (struct thread *t, const char *name, int priority)
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);
+
+  list_init(&t->children);
+  sema_init(&t->sema_wait, 0);
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and

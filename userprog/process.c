@@ -36,12 +36,30 @@ process_execute (const char *file_name)
   fn_copy = palloc_get_page (0);
   if (fn_copy == NULL)
     return TID_ERROR;
+
   strlcpy (fn_copy, file_name, PGSIZE);
 
+
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
-  if (tid == TID_ERROR)
+  // tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+
+  // Teresa
+  char *save_ptr;
+  char *argv0 = strtok_r(fn_copy, " ", &save_ptr);
+
+  tid = thread_create(argv0, PRI_DEFAULT, start_process, fn_copy);
+
+  if (tid == TID_ERROR){
     palloc_free_page (fn_copy); 
+    return TID_ERROR;
+  }
+
+  /*Wait for child process to finish loading*/
+  sema_down(&thread_current()->sema_wait);
+  if(!thread_current()->child_load)
+    return TID_ERROR;
+
+  // Teresa
   return tid;
 }
 
@@ -54,18 +72,46 @@ start_process (void *file_name_)
   struct intr_frame if_;
   bool success;
 
+  char *fn_copy = malloc(strlen(file_name) + 1);
+  strlcpy(fn_copy, file_name, strlen(file_name) + 1);
+
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
+
+  char *token, *save_ptr;
+  file_name = strtok_r(file_name, " ", &save_ptr);
   success = load (file_name, &if_.eip, &if_.esp);
 
-  /* If load failed, quit. */
-  palloc_free_page (file_name);
-  if (!success) 
-    thread_exit ();
+  if(success)
+  {
+    /* Argument Passing */
+    int argc = 0;
+    char *argv[50];
 
+    for(token = strtok_r(fn_copy," ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr)){
+      if_.esp -= (strlen(token) + 1);
+      memcpy(if_.esp, token, strlen(token) + 1);
+      argv[argc++] = (char*) if_.esp;
+    }
+    argv[argc] = NULL;
+    push_argument (&if_.esp, argc, argv);
+
+    thread_current()->parent->child_load = true;
+    sema_up(&thread_current()->parent->sema_wait);
+
+  }else
+  {
+    /* If load failed, quit. */
+    thread_current()->parent->child_load = false;
+    sema_up(&thread_current()->parent->sema_wait);
+    thread_exit ();
+  }
+
+  free(fn_copy);
+  
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
      threads/intr-stubs.S).  Because intr_exit takes all of its
@@ -74,6 +120,31 @@ start_process (void *file_name_)
      and jump to it. */
   asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (&if_) : "memory");
   NOT_REACHED ();
+}
+
+void push_argument(void **esp, int argc, char *argv[])
+{
+  while((uintptr_t)(*esp) % 4 != 0)
+  {
+    *esp -= sizeof(uint8_t);
+    *(uint8_t *)(*esp) = 0;
+  }
+
+  for(int i = argc; i >= 0; i--)
+  {
+    *esp -= sizeof(char *);
+    *(char **)(*esp) = argv[i];
+  }
+
+  char **argv_base = (char **)(*esp);
+  *esp -= sizeof(char **);
+  *(char ****)(*esp) = argv_base;
+
+  *esp -= sizeof(int);
+  *(int *)(*esp) = argc;
+
+  *esp -= sizeof(void *);
+  *(void **)(*esp) = NULL;
 }
 
 /* Waits for thread TID to die and returns its exit status.  If
