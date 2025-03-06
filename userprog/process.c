@@ -56,72 +56,13 @@ process_execute (const char *file_name)
 
   /*Wait for child process to finish loading*/
   sema_down(&thread_current()->sema_wait);
-  if(!thread_current()->child_load)
-    return TID_ERROR;
+  if(!thread_current()->succ_child) return TID_ERROR;
 
   // Teresa
   return tid;
 }
 
-/* A thread function that loads a user process and starts it
-   running. */
-static void
-start_process (void *file_name_)
-{
-  char *file_name = file_name_;
-  struct intr_frame if_;
-  bool success;
-
-  char *fn_copy = malloc(strlen(file_name) + 1);
-  strlcpy(fn_copy, file_name, strlen(file_name) + 1);
-
-  /* Initialize interrupt frame and load executable. */
-  memset (&if_, 0, sizeof if_);
-  if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
-  if_.cs = SEL_UCSEG;
-  if_.eflags = FLAG_IF | FLAG_MBS;
-
-  char *token, *save_ptr;
-  file_name = strtok_r(file_name, " ", &save_ptr);
-  success = load (file_name, &if_.eip, &if_.esp);
-
-  if(success)
-  {
-    /* Argument Passing */
-    int argc = 0;
-    char *argv[50];
-
-    for(token = strtok_r(fn_copy," ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr)){
-      if_.esp -= (strlen(token) + 1);
-      memcpy(if_.esp, token, strlen(token) + 1);
-      argv[argc++] = (char*) if_.esp;
-    }
-    argv[argc] = NULL;
-    push_argument (&if_.esp, argc, argv);
-
-    thread_current()->parent->child_load = true;
-    sema_up(&thread_current()->parent->sema_wait);
-
-  }else
-  {
-    /* If load failed, quit. */
-    thread_current()->parent->child_load = false;
-    sema_up(&thread_current()->parent->sema_wait);
-    thread_exit ();
-  }
-
-  free(fn_copy);
-  
-  /* Start the user process by simulating a return from an
-     interrupt, implemented by intr_exit (in
-     threads/intr-stubs.S).  Because intr_exit takes all of its
-     arguments on the stack in the form of a `struct intr_frame',
-     we just point the stack pointer (%esp) to our stack frame
-     and jump to it. */
-  asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (&if_) : "memory");
-  NOT_REACHED ();
-}
-
+// Teresa
 void push_argument(void **esp, int argc, char *argv[])
 {
   while((uintptr_t)(*esp) % 4 != 0)
@@ -147,6 +88,68 @@ void push_argument(void **esp, int argc, char *argv[])
   *(void **)(*esp) = NULL;
 }
 
+/* A thread function that loads a user process and starts it
+   running. */
+static void start_process (void *file_name_)
+{
+  char *file_name = file_name_;
+  struct intr_frame if_;
+  bool success;
+
+  char *fn_copy = malloc(strlen(file_name) + 1);
+  strlcpy(fn_copy, file_name, strlen(file_name) + 1);
+
+  /* Initialize interrupt frame and load executable. */
+  memset (&if_, 0, sizeof if_);
+  if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
+  if_.cs = SEL_UCSEG;
+  if_.eflags = FLAG_IF | FLAG_MBS;
+
+  // Teresa
+
+  char *token, *save_ptr;
+  file_name = strtok_r(file_name, " ", &save_ptr);
+  success = load (file_name, &if_.eip, &if_.esp);
+
+  if(success)
+  {
+    /* Task 1: Argument Passing */
+    int argc = 0;
+    char *argv[50];
+
+    for(token = strtok_r(fn_copy," ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr)){
+      if_.esp -= (strlen(token) + 1);
+      memcpy(if_.esp, token, strlen(token) + 1);
+      argv[argc++] = (char*) if_.esp;
+    }
+    argv[argc] = NULL;
+    push_argument (&if_.esp, argc, argv);
+
+    thread_current()->parent->succ_child = true;
+    sema_up(&thread_current()->parent->sema_wait);
+
+  }else
+  {
+    /* If load failed, quit. */
+    thread_current()->parent->succ_child = false;
+    sema_up(&thread_current()->parent->sema_wait);
+    thread_exit ();
+  }
+
+  free(fn_copy);
+  
+  /* Start the user process by simulating a return from an
+     interrupt, implemented by intr_exit (in
+     threads/intr-stubs.S).  Because intr_exit takes all of its
+     arguments on the stack in the form of a `struct intr_frame',
+     we just point the stack pointer (%esp) to our stack frame
+     and jump to it. */
+  asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (&if_) : "memory");
+  NOT_REACHED ();
+}
+
+
+
 /* Waits for thread TID to die and returns its exit status.  If
    it was terminated by the kernel (i.e. killed due to an
    exception), returns -1.  If TID is invalid or if it was not a
@@ -156,9 +159,12 @@ void push_argument(void **esp, int argc, char *argv[])
 
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
-int
-process_wait (tid_t child_tid UNUSED) 
+int process_wait (tid_t child_tid UNUSED) 
 {
+  // Teresa
+  int status = -1;
+  
+
   return -1;
 }
 

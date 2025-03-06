@@ -4,6 +4,7 @@
 #include <random.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include "threads/flags.h"
 #include "threads/interrupt.h"
 #include "threads/intr-stubs.h"
@@ -184,6 +185,16 @@ thread_create (const char *name, int priority,
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
 
+  #ifdef USERPROG
+    t->child_info = malloc(sizeof(struct child));
+    t->child_info->tid = tid;
+    sema_init (&t->child_info->sema_wait, 0);
+    list_push_back (&thread_current()->children, &t->child_info->elem);
+    t->child_info->st_exit = UINT32_MAX;
+    t->child_info->succ = false;
+
+  #endif
+
 
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
@@ -200,17 +211,9 @@ thread_create (const char *name, int priority,
   sf->eip = switch_entry;
   sf->ebp = 0;
 
-  old_level = intr_disable ();
-  intr_set_level(old_level);
-
 
   /* Add to run queue. */
   thread_unblock (t);
-
-#ifdef USERPROG
-  t->parent = thread_current();
-  list_push_back(&thread_current()->children, &t->child_elem);
-#endif
 
   return tid;
 }
@@ -475,12 +478,16 @@ init_thread (struct thread *t, const char *name, int priority)
   t->priority = priority;
   t->magic = THREAD_MAGIC;
 
+  /* Thread initialization for system call lab */
+  if(t == initial_thread) t->parent = NULL;
+  else t->parent = thread_current();
+  list_init(&t->children);
+  sema_init(&t->sema_wait, 0);
+  t->st_exit = UINT32_MAX;
+  
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);
-
-  list_init(&t->children);
-  sema_init(&t->sema_wait, 0);
 }
 
 /* Allocates a SIZE-byte frame at the top of thread T's stack and
