@@ -4,6 +4,7 @@
 #include "userprog/gdt.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "userprog/syscall.h"
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
@@ -147,6 +148,19 @@ page_fault (struct intr_frame *f)
   not_present = (f->error_code & PF_P) == 0;
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
+
+  // Teresa
+  /* 3.1.5 Accessing User Memory
+      The second method is to check only that a user pointer points below PHYS_BASE, then dereference it. 
+      An invalid user pointer will cause a "page fault" that you can handle by modifying the code for page_fault() in userprog/exception.c. 
+      This technique is normally faster because it takes advantage of the processor's MMU, so it tends to be used in real kernels (including Linux).
+  */
+  if (!user)
+  {
+     f->eip = f->eax;
+     f->eax = -1;
+     return;
+  }
 
   /* To implement virtual memory, delete the rest of the function
      body, and replace it with code that brings in the page to

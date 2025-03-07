@@ -2,6 +2,6 @@
 #define USERPROG_SYSCALL_H
 
 void syscall_init (void);
-void invaild_access(int status);
+void invaild_access(void);
 
 #endif /* userprog/syscall.h */

@@ -3,8 +3,9 @@
 #include <stddef.h>
 #include <random.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <string.h>
-#include <stdlib.h>
+#include <filesys/file.h>
 #include "threads/flags.h"
 #include "threads/interrupt.h"
 #include "threads/intr-stubs.h"
@@ -12,6 +13,7 @@
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "threads/malloc.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -37,6 +39,9 @@ static struct thread *initial_thread;
 
 /* Lock used by allocate_tid(). */
 static struct lock tid_lock;
+
+/* Lock used by file operations. */
+static struct lock file_lock;
 
 /* Stack frame for kernel_thread(). */
 struct kernel_thread_frame 
@@ -72,6 +77,9 @@ static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
 
+void acquire_file_lock(void){lock_acquire(&file_lock);}
+void release_file_lock(void){lock_release(&file_lock);}
+
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
    general and it is possible in this case only because loader.S
@@ -79,7 +87,7 @@ static tid_t allocate_tid (void);
 
    Also initializes the run queue and the tid lock.
 
-   After calling this function, be sure to initialize the pagef
+   After calling this function, be sure to initialize the page
    allocator before trying to create any threads with
    thread_create().
 
@@ -90,6 +98,7 @@ thread_init (void)
 {
   ASSERT (intr_get_level () == INTR_OFF);
 
+  lock_init (&file_lock);
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
@@ -117,6 +126,7 @@ thread_start (void)
   /* Wait for the idle thread to initialize idle_thread. */
   sema_down (&idle_started);
 }
+
 
 /* Called by the timer interrupt handler at each timer tick.
    Thus, this function runs in an external interrupt context. */
@@ -172,7 +182,6 @@ thread_create (const char *name, int priority,
   struct switch_entry_frame *ef;
   struct switch_threads_frame *sf;
   tid_t tid;
-  enum intr_level old_level;
 
   ASSERT (function != NULL);
 
@@ -185,16 +194,15 @@ thread_create (const char *name, int priority,
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
 
-  #ifdef USERPROG
-    t->child_info = malloc(sizeof(struct child));
-    t->child_info->tid = tid;
-    sema_init (&t->child_info->sema_wait, 0);
-    list_push_back (&thread_current()->children, &t->child_info->elem);
-    t->child_info->st_exit = UINT32_MAX;
-    t->child_info->succ = false;
-
-  #endif
-
+#ifdef USERPROG
+  // Teresa
+  t->child_info = malloc(sizeof(struct child));
+  t->child_info->tid = tid;
+  sema_init (&t->child_info->sema_wait, 0);
+  list_push_back (&thread_current()->children, &t->child_info->elem);
+  t->child_info->st_exit = UINT32_MAX;
+  t->child_info->succ = false;
+#endif
 
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
@@ -299,11 +307,36 @@ thread_exit (void)
 #ifdef USERPROG
   process_exit ();
 #endif
+  intr_disable ();
+#ifdef USERPROG
+  // Teresa
+  printf ("%s: exit(%d)\n",thread_name(), thread_current()->st_exit);
+  thread_current ()->child_info->st_exit = thread_current()->st_exit;
+  sema_up (&thread_current()->child_info->sema_wait);
+
+  /* Close the executing file in this thread. */
+  if(thread_current()->exec_file != NULL){
+    acquire_file_lock();
+    file_close(thread_current()->exec_file);
+    release_file_lock();
+    thread_current()->exec_file = NULL;
+  }
+
+  /* Close all opened files*/
+  while(!list_empty(&thread_current()->files)){
+    struct list_elem *e = list_pop_front(&thread_current()->files);
+    struct open_file *f = list_entry(e, struct open_file, elem);
+    acquire_file_lock();
+    file_close(f->file);
+    release_file_lock();
+    free(f);
+  }
+
+#endif
 
   /* Remove thread from all threads list, set our status to dying,
-     and schedule another process.  That process will destroy us
-     when it calls thread_schedule_tail(). */
-  intr_disable ();
+    and schedule another process.  That process will destroy us
+    when it calls thread_schedule_tail(). */
   list_remove (&thread_current()->allelem);
   thread_current ()->status = THREAD_DYING;
   schedule ();
@@ -438,7 +471,7 @@ kernel_thread (thread_func *function, void *aux)
   function (aux);       /* Execute the thread function. */
   thread_exit ();       /* If function() returns, kill the thread. */
 }
-
+
 /* Returns the running thread. */
 struct thread *
 running_thread (void) 
@@ -478,13 +511,20 @@ init_thread (struct thread *t, const char *name, int priority)
   t->priority = priority;
   t->magic = THREAD_MAGIC;
 
-  /* Thread initialization for system call lab */
+#ifdef USERPROG
+  // Teresa
+  /* Thread initialization */
   if(t == initial_thread) t->parent = NULL;
   else t->parent = thread_current();
   list_init(&t->children);
   sema_init(&t->sema_wait, 0);
   t->st_exit = UINT32_MAX;
-  
+  t->child_loaded = true;
+
+  t->exec_file = NULL;
+  t->file_fd = 2;
+  list_init(&t->files);
+#endif 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);

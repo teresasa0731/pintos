@@ -4,8 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
-
-#include "synch.h"
+#include <threads/synch.h>
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -83,13 +82,21 @@ typedef int tid_t;
    ready state is on the run queue, whereas only a thread in the
    blocked state is on a semaphore wait list. */
 
+// Teresa
 struct child
 {
    tid_t tid;
    int st_exit;
    bool succ;
-   struct semaphore sema_wait;
-   struct list_elem elem;        /*element in `parent->child` */
+   struct semaphore sema_wait;   /* Semaphore for control waiting. */
+   struct list_elem elem;        /* element in `parent->child` */
+};
+
+struct open_file
+{
+   int fd;                       /* File descriptor number. */
+   struct file* file;            /* pointor to actual file. */
+   struct list_elem elem;        /* Elements for thread's open-file list. */
 };
 
 
@@ -109,14 +116,18 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
-
+   // Teresa
     struct thread *parent;
-    struct list children;               /* List of child processes create by this thread. */
-    struct child *child_info;         /* Point to the structure in parent's child list.*/
+    struct list children;               /* List of child processes created by this thread. */
+    struct child *child_info;           /* Point to the structure of this thread in parent's child list.*/
 
     int st_exit;
-    bool succ_child;
+    bool child_loaded;
     struct semaphore sema_wait;
+
+    struct list files;
+    struct file *exec_file;              /* The executable file this thread is running. */
+    int file_fd;
 
 #endif
 
@@ -131,6 +142,9 @@ extern bool thread_mlfqs;
 
 void thread_init (void);
 void thread_start (void);
+
+void acquire_file_lock(void);
+void release_file_lock(void);
 
 void thread_tick (void);
 void thread_print_stats (void);

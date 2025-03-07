@@ -17,9 +17,11 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "threads/malloc.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
+static void push_argument(void **esp, char *cmdline);
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -28,48 +30,55 @@ static bool load (const char *cmdline, void (**eip) (void), void **esp);
 tid_t
 process_execute (const char *file_name) 
 {
-  char *fn_copy;
+  char *fn_copy, *fn_copy2;
   tid_t tid;
 
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
-  fn_copy = palloc_get_page (0);
+  fn_copy = malloc(strlen(file_name)+1);
+  fn_copy2 = malloc(strlen(file_name)+1);
   if (fn_copy == NULL)
     return TID_ERROR;
 
-  strlcpy (fn_copy, file_name, PGSIZE);
+  strlcpy (fn_copy, file_name, strlen(file_name)+1);
+  strlcpy (fn_copy2, file_name, strlen(file_name)+1);
 
 
   /* Create a new thread to execute FILE_NAME. */
-  // tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
-
   // Teresa
   char *save_ptr;
-  char *argv0 = strtok_r(fn_copy, " ", &save_ptr);
+  fn_copy2 = strtok_r(fn_copy2, " ", &save_ptr);
 
-  tid = thread_create(argv0, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create(fn_copy2, PRI_DEFAULT, start_process, fn_copy);
+  free(fn_copy2);
 
   if (tid == TID_ERROR){
     palloc_free_page (fn_copy); 
     return TID_ERROR;
   }
 
-  /*Wait for child process to finish loading*/
+  /* Semaphore: Wait for child process to finish loading. */
   sema_down(&thread_current()->sema_wait);
-  if(!thread_current()->succ_child) return TID_ERROR;
+  if(!thread_current()->child_loaded) return TID_ERROR;
 
-  // Teresa
   return tid;
 }
 
 // Teresa
-void push_argument(void **esp, int argc, char *argv[])
+static void push_argument(void **esp, char *cmdline)
 {
-  while((uintptr_t)(*esp) % 4 != 0)
-  {
-    *esp -= sizeof(uint8_t);
-    *(uint8_t *)(*esp) = 0;
+  int argc = 0;
+  char *argv[50], *token, *save_ptr;
+
+  for(token = strtok_r(cmdline," ", &save_ptr); token != NULL; token = strtok_r(NULL, " ", &save_ptr)){
+    *esp -= (strlen(token) + 1);
+    printf("[DEBUG] token :%s\n",token);
+    memcpy(*esp, token, strlen(token) + 1);
+    argv[argc++] = (char*) *esp;
   }
+  argv[argc] = NULL;
+
+  *esp = (void *)((uintptr_t)(*esp) & 0xfffffffc);
 
   for(int i = argc; i >= 0; i--)
   {
@@ -79,7 +88,7 @@ void push_argument(void **esp, int argc, char *argv[])
 
   char **argv_base = (char **)(*esp);
   *esp -= sizeof(char **);
-  *(char ****)(*esp) = argv_base;
+  *(char ***)(*esp) = argv_base;
 
   *esp -= sizeof(int);
   *(int *)(*esp) = argc;
@@ -107,31 +116,22 @@ static void start_process (void *file_name_)
 
   // Teresa
 
-  char *token, *save_ptr;
+  char *save_ptr;
   file_name = strtok_r(file_name, " ", &save_ptr);
   success = load (file_name, &if_.eip, &if_.esp);
-
+  // printf("[DEBUG] load file %s, (%d)\n", file_name, success);
   if(success)
   {
-    /* Task 1: Argument Passing */
-    int argc = 0;
-    char *argv[50];
+    
+    push_argument (&if_.esp, save_ptr);
 
-    for(token = strtok_r(fn_copy," ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr)){
-      if_.esp -= (strlen(token) + 1);
-      memcpy(if_.esp, token, strlen(token) + 1);
-      argv[argc++] = (char*) if_.esp;
-    }
-    argv[argc] = NULL;
-    push_argument (&if_.esp, argc, argv);
-
-    thread_current()->parent->succ_child = true;
+    thread_current()->parent->child_loaded = true;
     sema_up(&thread_current()->parent->sema_wait);
 
   }else
   {
     /* If load failed, quit. */
-    thread_current()->parent->succ_child = false;
+    thread_current()->parent->child_loaded = false;
     sema_up(&thread_current()->parent->sema_wait);
     thread_exit ();
   }
@@ -159,13 +159,34 @@ static void start_process (void *file_name_)
 
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
+// Teresa
+/* Helper Function: Search child_tid in parent's child list, and return relative struct child pointer. */
+static struct child *find_child(struct thread *parent, tid_t child_tid)
+{
+  struct list_elem *e;
+  for(e = list_begin(&parent->children); e != list_end(&parent->children); e = list_next(e)){
+    struct child *c = list_entry(e, struct child, elem);
+    if(c->tid == child_tid) return c;
+  }
+  return NULL;
+}
+
 int process_wait (tid_t child_tid UNUSED) 
 {
-  // Teresa
-  int status = -1;
-  
+  struct thread *cur = thread_current();
+  struct child *c = find_child(cur, child_tid);
 
-  return -1;
+  if(!c) return -1;
+  if(c->succ) return -1;
+
+  c->succ = true;
+  sema_down(&c->sema_wait);
+
+  int status = c->st_exit;
+  list_remove(&c->elem);
+  free(c);
+
+  return status;
 }
 
 /* Free the current process's resources. */
@@ -348,6 +369,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
         case PT_LOAD:
           if (validate_segment (&phdr, file)) 
             {
+              
               bool writable = (phdr.p_flags & PF_W) != 0;
               uint32_t file_page = phdr.p_offset & ~PGMASK;
               uint32_t mem_page = phdr.p_vaddr & ~PGMASK;
@@ -392,7 +414,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
   file_close (file);
   return success;
 }
-
+
 /* load() helpers. */
 
 static bool install_page (void *upage, void *kpage, bool writable);

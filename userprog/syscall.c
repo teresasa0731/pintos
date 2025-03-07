@@ -19,33 +19,16 @@
 #define MAX_SYSCALL 20
 
 // Teresa
-typedef int pid_t;
-/* Store all syctem calls you may implement in lab01 - user program. */
-static void (*syscalls[MAX_SYSCALL])(struct intr_frame *) = {
-  [SYS_HALT] = sys_halt,
-  [SYS_EXIT] = sys_exit,
-  [SYS_EXEC] = sys_exec,
-  [SYS_WAIT] = sys_wait,
-  [SYS_CREATE] = sys_create,
-  [SYS_REMOVE] = sys_remove,
-  [SYS_OPEN] = sys_open,
-  [SYS_FILESIZE] = sys_filesize,
-  [SYS_READ] = sys_read,
-  [SYS_WRITE] = sys_write,
-  [SYS_SEEK] = sys_seek,
-  [SYS_TELL] = sys_tell,
-  [SYS_CLOSE] = sys_close
-};
 
 /* Task 2:　System call for process. */
 
 void sys_halt(void);                    /* syscall halt. */
 void sys_exit(struct intr_frame* f);    /* syscall exit. */
 void sys_exec(struct intr_frame* f);    /* syscall exec. */
-void sys_wait (struct intr_frame* f);   /*syscall wait */
+void sys_wait(struct intr_frame* f);    /* syscall wait */
 
 /* Task 3: System call for file. */
-bool sys_create(struct intr_frame* f);  /* syscall create */
+void sys_create(struct intr_frame* f);  /* syscall create */
 void sys_remove(struct intr_frame* f);  /* syscall remove */
 void sys_open(struct intr_frame* f);    /* syscall open */
 void sys_filesize(struct intr_frame* f);/* syscall filesize */
@@ -55,11 +38,29 @@ void sys_seek(struct intr_frame* f);    /* syscall seek */
 void sys_tell(struct intr_frame* f);    /* syscall tell */
 void sys_close(struct intr_frame* f);   /* syscall close */
 
+/* Store all syctem calls you may implement in lab01 - user program. */
+static void (*syscalls[MAX_SYSCALL])(struct intr_frame *) = {
+  [SYS_HALT] = sys_halt,
+  [SYS_EXIT] = sys_exit,
+  [SYS_EXEC] = sys_exec,
+  [SYS_WAIT] = sys_wait,
+  // [SYS_CREATE] = sys_create,
+  // [SYS_REMOVE] = sys_remove,
+  // [SYS_OPEN] = sys_open,
+  // [SYS_FILESIZE] = sys_filesize,
+  // [SYS_READ] = sys_read,
+  [SYS_WRITE] = sys_write,
+  // [SYS_SEEK] = sys_seek,
+  // [SYS_TELL] = sys_tell,
+  // [SYS_CLOSE] = sys_close
+};
+
 /* Helper Functions*/
 
 static void syscall_handler (struct intr_frame *);
-void *check_ptr(const void *vaddr);
+static void *check_ptr(const void *vaddr);
 static int get_user(const uint8_t *uaddr);
+static struct open_file *find_file(int fd);
 void invalid_access (void);
 
 void syscall_init (void) 
@@ -67,8 +68,10 @@ void syscall_init (void)
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
 }
 
-/*  Accessing user memory
-  code refer from: https://cs162.org/static/proj/pintos-docs/docs/userprog/accessing-user-mem/
+/* Reads a byte at user virtual address UADDR.
+   UADDR must be below PHYS_BASE.
+   Returns the byte value if successful, -1 if a segfault occurred.
+  code refer from: https://web.stanford.edu/class/cs140/projects/pintos/pintos_3.html#SEC36
 */
 static int get_user (const uint8_t *uaddr)
 {
@@ -77,17 +80,19 @@ static int get_user (const uint8_t *uaddr)
      : "=&a" (result) : "m" (*uaddr));
   return result;
 }
-/* Check if the address is vaild:
+
+/* 3.1.5 Accessing User Memory
+  Check if the address is vaild:
   1. within in user space
   2. mapped in page directory
   3. readable
 */
-void *check_ptr(const void *vaddr)
+static void *check_ptr(const void *vaddr)
 {
   if (!is_user_vaddr(vaddr))
     invalid_access();
 
-  if (!pagedir_get_page(thread_current()->pagedir), vaddr)
+  if (!pagedir_get_page(thread_current()->pagedir, vaddr))
     invalid_access();
 
   for (size_t i = 0; i < sizeof(int); i++){
@@ -95,6 +100,7 @@ void *check_ptr(const void *vaddr)
       invalid_access(); 
   }
 }
+
 
 /* System Call: void halt (void)
     Terminates Pintos by calling shutdown_power_off() (declared in devices/shutdown.h). 
@@ -141,18 +147,64 @@ void sys_exec(struct intr_frame* f)
 */
 void sys_wait(struct intr_frame* f)
 {
-  pid_t *pid_ptr = (pid_t *)(f->esp + 1);
+  tid_t *pid_ptr = (tid_t *)(f->esp + 1);
   check_ptr(pid_ptr);
   f->eax = process_wait(*pid_ptr);
 }
 
-/*
+
+/* System Call: int write (int fd, const void *buffer, unsigned size)
+    Writes size bytes from buffer to the open file fd. Returns the number of bytes actually written, which may be less than size if some bytes could not be written.
+    Writing past end-of-file would normally extend the file, but file growth is not implemented by the basic file system. 
+    The expected behavior is to write as many bytes as possible up to end-of-file and return the actual number written, or 0 if no bytes could be written at all.
+    Fd 1 writes to the console. Your code to write to the console should write all of buffer in one call to putbuf(), at least as long as size is not bigger than a few hundred bytes. 
+    (It is reasonable to break up larger buffers.) Otherwise, lines of text output by different processes may end up interleaved on the console, confusing both human readers and our grading scripts.
 */
+void sys_write(struct intr_frame* f)
+{
+  uint32_t *args = (uint32_t)f->esp;
+
+  int fd = args[1];
+  const char *buffer = (const char *)args[2];
+  off_t size = (off_t)args[3];
+
+  check_ptr(buffer);
+  check_ptr(buffer + size - 1);
+
+  if(fd == 1){  // STDOUT
+    putbuf(buffer, size);
+    f->eax = size;
+  }else{
+    struct open_file *tmp = find_file(fd);
+    if(tmp){
+      acquire_file_lock();
+      f->eax = file_write(tmp->file, buffer, size);
+      release_file_lock();
+    }else{
+      f->eax = 0;
+    }
+  }
+}
+
+static struct open_file *find_file(int fd)
+{
+  struct list *files = &thread_current()->files;
+  for (struct list_elem *e = list_begin(files); e != list_end(files); e = list_next(e)) {
+      struct open_file *f = list_entry(e, struct open_file, elem);
+      if (f->fd == fd) {
+          return f;
+      }
+  }
+  return NULL;
+}
 
 
-
-
-/* Except handler for all invalid conditions.*/
+/* Except handler for all invalid conditions.
+    If a system call is passed an invalid argument, acceptable options include:
+    a. returning an error value (for those calls that return a value)
+    b. returning an undefined value
+    c. terminating the process.
+*/
 void invalid_access (void)
 {
   thread_current()->st_exit = -1;
@@ -162,12 +214,14 @@ void invalid_access (void)
 static void syscall_handler (struct intr_frame *f UNUSED) 
 {
   printf ("system call!\n");
+  thread_exit();
   
-  check_ptr((int *)f->esp + 1);
+  // check_ptr((int *)f->esp + 1);
 
-  int sys_code = *(int *)f->esp;
-  if (sys_code < 0 || sys_code >= MAX_SYSCALL)
-    invalid_access();
+  // int sys_code = *(int *)f->esp;
+  // if (sys_code < 0 || sys_code >= MAX_SYSCALL)
+  //   invalid_access();
 
-  syscalls[sys_code](f);
+  // syscalls[sys_code](f);
+
 }
